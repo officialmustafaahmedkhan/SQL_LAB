@@ -64,7 +64,8 @@ DB_CONFIG = {
     'password': os.getenv('DB_PASSWORD', 'FbD7mfUYc6'),
     'database': os.getenv('DB_NAME', 'sql12823105'),
     'charset': 'utf8mb4',
-    'cursorclass': pymysql.cursors.DictCursor
+    'cursorclass': pymysql.cursors.DictCursor,
+    'ssl': {'ssl_disabled': True}
 }
 
 # Disable SSL warning
@@ -72,38 +73,34 @@ import pymysql
 pymysql.version_info = (2, 0, 3, 'final', 0)
 pymysql.install_as_MySQLdb()
 
+USE_LOCAL_SQLITE = os.getenv('USE_LOCAL_SQLITE', 'true').lower() == 'true'
+
+# SQLite path for practice queries
+SQL_DB_PATH = os.getenv('SQL_DB_PATH', './sqllab.db')
+
+# Disable SSL warning
+import pymysql
+pymysql.version_info = (2, 0, 3, 'final', 0)
+pymysql.install_as_MySQLdb()
+
 # Query Security Settings
-QUERY_TIMEOUT_MS = int(os.getenv('QUERY_TIMEOUT_MS', 3000))
+QUERY_TIMEOUT_MS = int(os.getenv('QUERY_TIMEOUT_MS', 300))
 MAX_ROWS = int(os.getenv('MAX_ROWS', 100))
 ALLOWED_DOMAIN = os.getenv('ALLOWED_DOMAIN', '')
 
 # =====================================================
 # Dual Database Setup
-# AUTH_DB = For User Authentication (SQLite/Prisma)
-# DB_HOST = For SQL Queries (MySQL Workbench)
+# AUTH_DB = For User Authentication (SQLite)
+# SQL_DB = For SQL Practice Queries (MySQL or SQLite)
 # =====================================================
 
-AUTH_DB_TYPE = os.getenv('AUTH_DB_TYPE', 'sqlite')  # sqlite, postgres, mysql
+USE_LOCAL_SQLITE = os.getenv('USE_LOCAL_SQLITE', 'true').lower() == 'true'
 
 # SQLite for Auth
 AUTH_DB_PATH = os.getenv('AUTH_DB_PATH', './sqllab_auth.db')
 
-# MySQL for SQL Queries
-SQL_DB_HOST = os.getenv('DB_HOST', '127.0.0.1')
-SQL_DB_PORT = int(os.getenv('DB_PORT', 3306))
-SQL_DB_USER = os.getenv('DB_USER', 'root')
-SQL_DB_PASSWORD = os.getenv('DB_PASSWORD', 'admin')
-SQL_DB_NAME = os.getenv('DB_NAME', 'sqllab')
-
-SQL_DB_CONFIG = {
-    'host': SQL_DB_HOST,
-    'port': SQL_DB_PORT,
-    'user': SQL_DB_USER,
-    'password': SQL_DB_PASSWORD,
-    'database': SQL_DB_NAME,
-    'charset': 'utf8mb4',
-    'cursorclass': pymysql.cursors.DictCursor
-}
+# SQLite path for practice queries
+SQL_DB_PATH = os.getenv('SQL_DB_PATH', './sqllab.db')
 
 # Dangerous SQL keywords to block
 DANGEROUS_KEYWORDS = [
@@ -122,13 +119,20 @@ ALLOWED_STATEMENTS = ['SELECT', 'INSERT', 'UPDATE', 'DELETE',
 
 
 def get_db():
-    """Get MySQL connection for SQL queries (Workbench)"""
-    if 'db' not in g:
-        g.db = pymysql.connect(**SQL_DB_CONFIG)
-    return g.db
+    """Get database connection for SQL queries (SQLite or MySQL based on config)"""
+    if USE_LOCAL_SQLITE:
+        if 'sql_db' not in g:
+            import sqlite3
+            g.sql_db = sqlite3.connect(SQL_DB_PATH)
+            g.sql_db.row_factory = sqlite3.Row
+        return g.sql_db
+    else:
+        if 'db' not in g:
+            g.db = pymysql.connect(**DB_CONFIG)
+        return g.db
 
 def get_auth_db():
-    """Get SQLite connection for Auth database (Prisma compatible)"""
+    """Get SQLite connection for Auth database"""
     if 'auth_db' not in g:
         import sqlite3
         g.auth_db = sqlite3.connect(AUTH_DB_PATH)
@@ -137,9 +141,14 @@ def get_auth_db():
 
 @app.teardown_appcontext
 def close_db(exception):
-    db = g.pop('db', None)
-    if db is not None:
-        db.close()
+    if USE_LOCAL_SQLITE:
+        sql_db = g.pop('sql_db', None)
+        if sql_db is not None:
+            sql_db.close()
+    else:
+        db = g.pop('db', None)
+        if db is not None:
+            db.close()
     auth_db = g.pop('auth_db', None)
     if auth_db is not None:
         auth_db.close()
@@ -185,72 +194,123 @@ def init_database():
     print("Auth database initialized successfully!")
     
     # =====================================================
-    # SQL QUERY DATABASE (MySQL) - For Practice Tables
+    # SQL QUERY DATABASE (SQLite) - For Practice Tables
     # =====================================================
-    db = get_db()
-    cursor = db.cursor()
+    sql_db = sqlite3.connect(SQL_DB_PATH)
+    sql_cursor = sql_db.cursor()
     
-    # Query logs table (MySQL)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS query_logs (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            user_id INT NOT NULL,
-            query_text TEXT NOT NULL,
-            query_type VARCHAR(20) NOT NULL,
-            execution_time_ms INT DEFAULT NULL,
-            rows_affected INT DEFAULT 0,
-            status VARCHAR(20) NOT NULL,
-            error_message TEXT DEFAULT NULL,
-            timestamp DATETIME DEFAULT NULL
-        )
-    ''')
+    if USE_LOCAL_SQLITE:
+        # SQLite syntax
+        sql_cursor.execute('''
+            CREATE TABLE IF NOT EXISTS query_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                query_text TEXT NOT NULL,
+                query_type TEXT NOT NULL,
+                execution_time_ms INTEGER DEFAULT NULL,
+                rows_affected INTEGER DEFAULT 0,
+                status TEXT NOT NULL,
+                error_message TEXT DEFAULT NULL,
+                timestamp DATETIME DEFAULT NULL
+            )
+        ''')
+        
+        sql_cursor.execute('''
+            CREATE TABLE IF NOT EXISTS students (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                first_name TEXT NOT NULL,
+                last_name TEXT NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                department TEXT,
+                enrollment_year INTEGER,
+                gpa REAL
+            )
+        ''')
+        
+        sql_cursor.execute('''
+            CREATE TABLE IF NOT EXISTS courses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                course_code TEXT UNIQUE NOT NULL,
+                course_name TEXT NOT NULL,
+                credits INTEGER DEFAULT 3,
+                department TEXT,
+                instructor TEXT
+            )
+        ''')
+        
+        sql_cursor.execute('''
+            CREATE TABLE IF NOT EXISTS enrollments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                student_id INTEGER NOT NULL,
+                course_id INTEGER NOT NULL,
+                grade TEXT,
+                semester TEXT,
+                enrolled_at DATETIME DEFAULT NULL,
+                FOREIGN KEY (student_id) REFERENCES students(id),
+                FOREIGN KEY (course_id) REFERENCES courses(id)
+            )
+        ''')
+    else:
+        # MySQL syntax
+        sql_cursor.execute('''
+            CREATE TABLE IF NOT EXISTS query_logs (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                query_text TEXT NOT NULL,
+                query_type VARCHAR(20) NOT NULL,
+                execution_time_ms INT DEFAULT NULL,
+                rows_affected INT DEFAULT 0,
+                status VARCHAR(20) NOT NULL,
+                error_message TEXT DEFAULT NULL,
+                timestamp DATETIME DEFAULT NULL
+            )
+        ''')
+        
+        sql_cursor.execute('''
+            CREATE TABLE IF NOT EXISTS students (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                first_name VARCHAR(50) NOT NULL,
+                last_name VARCHAR(50) NOT NULL,
+                email VARCHAR(100) UNIQUE NOT NULL,
+                department VARCHAR(100),
+                enrollment_year INT,
+                gpa DECIMAL(3,2)
+            )
+        ''')
+        
+        sql_cursor.execute('''
+            CREATE TABLE IF NOT EXISTS courses (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                course_code VARCHAR(20) UNIQUE NOT NULL,
+                course_name VARCHAR(100) NOT NULL,
+                credits INT DEFAULT 3,
+                department VARCHAR(100),
+                instructor VARCHAR(100)
+            )
+        ''')
+        
+        sql_cursor.execute('''
+            CREATE TABLE IF NOT EXISTS enrollments (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                student_id INT NOT NULL,
+                course_id INT NOT NULL,
+                grade VARCHAR(2),
+                semester VARCHAR(20),
+                enrolled_at DATETIME DEFAULT NULL,
+                FOREIGN KEY (student_id) REFERENCES students(id),
+                FOREIGN KEY (course_id) REFERENCES courses(id)
+            )
+        ''')
     
-    # Sample practice tables (students, courses, enrollments)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS students (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            first_name VARCHAR(50) NOT NULL,
-            last_name VARCHAR(50) NOT NULL,
-            email VARCHAR(100) UNIQUE NOT NULL,
-            department VARCHAR(100),
-            enrollment_year INT,
-            gpa DECIMAL(3,2)
-        )
-    ''')
+    # Insert sample data if empty
+    sql_cursor.execute('SELECT COUNT(*) FROM students')
+    students_count = sql_cursor.fetchone()[0]
     
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS courses (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            course_code VARCHAR(20) UNIQUE NOT NULL,
-            course_name VARCHAR(100) NOT NULL,
-            credits INT DEFAULT 3,
-            department VARCHAR(100),
-            instructor VARCHAR(100)
-        )
-    ''')
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS enrollments (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            student_id INT NOT NULL,
-            course_id INT NOT NULL,
-            grade VARCHAR(2),
-            semester VARCHAR(20),
-            enrolled_at DATETIME DEFAULT NULL,
-            FOREIGN KEY (student_id) REFERENCES students(id),
-            FOREIGN KEY (course_id) REFERENCES courses(id)
-        )
-    ''')
-    
-    # Insert sample data if empty - check each table
-    cursor.execute('SELECT COUNT(*) as count FROM students')
-    students_count = cursor.fetchone()['count']
-    
-    cursor.execute('SELECT COUNT(*) as count FROM courses')
-    courses_count = cursor.fetchone()['count']
+    sql_cursor.execute('SELECT COUNT(*) FROM courses')
+    courses_count = sql_cursor.fetchone()[0]
     
     if students_count == 0:
-        cursor.execute('''
+        sql_cursor.execute('''
             INSERT INTO students (first_name, last_name, email, department, enrollment_year, gpa) VALUES
             ('Ahmed', 'Khan', 'ahmed@iobm.edu.pk', 'Computer Science', 2023, 3.75),
             ('Fatima', 'Ali', 'fatima@iobm.edu.pk', 'Business Admin', 2022, 3.90),
@@ -258,7 +318,7 @@ def init_database():
         ''')
     
     if courses_count == 0:
-        cursor.execute('''
+        sql_cursor.execute('''
             INSERT INTO courses (course_code, course_name, credits, department, instructor) VALUES
             ('CS101', 'Introduction to Programming', 4, 'Computer Science', 'Dr. Ahmad'),
             ('CS201', 'Data Structures', 4, 'Computer Science', 'Dr. Fatima'),
@@ -266,20 +326,17 @@ def init_database():
         ''')
     
     if students_count > 0 and courses_count > 0:
-        cursor.execute('SELECT COUNT(*) as count FROM enrollments')
-        if cursor.fetchone()['count'] == 0:
-            cursor.execute('''
+        sql_cursor.execute('SELECT COUNT(*) FROM enrollments')
+        if sql_cursor.fetchone()[0] == 0:
+            sql_cursor.execute('''
                 INSERT INTO enrollments (student_id, course_id, grade, semester) VALUES
                 (1, 1, 'A', 'Fall 2023'),
                 (2, 2, 'A-', 'Spring 2024'),
                 (3, 1, 'B+', 'Fall 2023')
             ''')
     
-    # Auth DB cursor already closed above - skip duplicate
-    
-    # Commit MySQL changes
-    db.commit()
-    cursor.close()
+    sql_db.commit()
+    sql_cursor.close()
     print("Database initialized successfully!")
 
 
@@ -613,6 +670,9 @@ def execute_query():
             
             if query_type in RESULT_STATEMENTS:
                 rows = cursor.fetchall()
+                # Convert to dict for consistency
+                if USE_LOCAL_SQLITE:
+                    rows = [dict(row) for row in rows]
                 result_data = {
                     'query': query,
                     'queryType': query_type,
@@ -636,11 +696,17 @@ def execute_query():
             all_results.append(result_data)
             
             # Log successful query
-            now = datetime.now()
-            cursor.execute('''
-                INSERT INTO query_logs (user_id, query_text, query_type, execution_time_ms, rows_affected, status, timestamp)
-                VALUES (%s, %s, %s, %s, %s, 'success', %s)
-            ''', (user_id, query, query_type, result_data['executionTime'], result_data['rowsAffected'], now))
+            now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            if USE_LOCAL_SQLITE:
+                cursor.execute('''
+                    INSERT INTO query_logs (user_id, query_text, query_type, execution_time_ms, rows_affected, status, timestamp)
+                    VALUES (?, ?, ?, ?, ?, 'success', ?)
+                ''', (user_id, query, query_type, result_data['executionTime'], result_data['rowsAffected'], now))
+            else:
+                cursor.execute('''
+                    INSERT INTO query_logs (user_id, query_text, query_type, execution_time_ms, rows_affected, status, timestamp)
+                    VALUES (%s, %s, %s, %s, %s, 'success', %s)
+                ''', (user_id, query, query_type, result_data['executionTime'], result_data['rowsAffected'], now))
             
         except Exception as e:
             error_msg = str(e)
@@ -655,11 +721,17 @@ def execute_query():
             })
             
             # Log error
-            now = datetime.now()
-            cursor.execute('''
-                INSERT INTO query_logs (user_id, query_text, query_type, execution_time_ms, status, error_message, timestamp)
-                VALUES (%s, %s, %s, %s, 'error', %s, %s)
-            ''', (user_id, query, query_type, exec_time, error_msg, now))
+            now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            if USE_LOCAL_SQLITE:
+                cursor.execute('''
+                    INSERT INTO query_logs (user_id, query_text, query_type, execution_time_ms, status, error_message, timestamp)
+                    VALUES (?, ?, ?, ?, 'error', ?, ?)
+                ''', (user_id, query, query_type, exec_time, error_msg, now))
+            else:
+                cursor.execute('''
+                    INSERT INTO query_logs (user_id, query_text, query_type, execution_time_ms, status, error_message, timestamp)
+                    VALUES (%s, %s, %s, %s, 'error', %s, %s)
+                ''', (user_id, query, query_type, exec_time, error_msg, now))
     
     db.commit()
     cursor.close()
