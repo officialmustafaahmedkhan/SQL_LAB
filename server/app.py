@@ -59,32 +59,60 @@ def send_email(to_email, subject, html_content):
 # =====================================================
 # Database Configuration
 # =====================================================
-# Default to SQLite for local development / Replit
-USE_LOCAL_SQLITE = os.getenv('USE_LOCAL_SQLITE', '').lower() in ('true', '1', 'yes', '')
+# Auto-detect: Try MySQL first, fallback to SQLite
+mysql_host = os.getenv('DB_HOST', '127.0.0.1')
+mysql_port = int(os.getenv('DB_PORT', 3306))
+mysql_user = os.getenv('DB_USER', 'root')
+mysql_pass = os.getenv('DB_PASSWORD', '')
+mysql_db = os.getenv('DB_NAME', 'sqllab')
+
+def try_mysql_connection():
+    """Test if MySQL is available"""
+    try:
+        import pymysql
+        test_config = {
+            'host': mysql_host,
+            'port': mysql_port,
+            'user': mysql_user,
+            'password': mysql_pass,
+            'database': mysql_db,
+            'connect_timeout': 2,
+            'ssl': {'ssl_disabled': True}
+        }
+        conn = pymysql.connect(**test_config)
+        conn.close()
+        return True
+    except:
+        return False
+
+# Check MySQL availability
+FORCE_SQLITE = os.getenv('USE_LOCAL_SQLITE', '').lower() in ('true', '1', 'yes', '')
+
+if FORCE_SQLITE:
+    USE_LOCAL_SQLITE = True
+    print("[DB] SQLite mode (forced)")
+else:
+    # Try MySQL first
+    mysql_available = try_mysql_connection()
+    USE_LOCAL_SQLITE = not mysql_available
+    print(f"[DB] MySQL available: {mysql_available}")
+    if not mysql_available:
+        print("[DB] Falling back to SQLite")
 
 # SQLite path for practice queries
 SQL_DB_PATH = os.getenv('SQL_DB_PATH', './sqllab.db')
 
-# MySQL Configuration (for production with real MySQL)
+# MySQL Configuration
 DB_CONFIG = {
-    'host': os.getenv('DB_HOST', 'sql12.freesqldatabase.com'),
-    'port': int(os.getenv('DB_PORT', 3306)),
-    'user': os.getenv('DB_USER', 'sql12823105'),
-    'password': os.getenv('DB_PASSWORD', 'FbD7mfUYc6'),
-    'database': os.getenv('DB_NAME', 'sql12823105'),
+    'host': mysql_host,
+    'port': mysql_port,
+    'user': mysql_user,
+    'password': mysql_pass,
+    'database': mysql_db,
     'charset': 'utf8mb4',
     'cursorclass': pymysql.cursors.DictCursor,
     'ssl': {'ssl_disabled': True}
 }
-
-# For backwards compatibility - check legacy env var
-if not USE_LOCAL_SQLITE and os.getenv('DB_HOST'):
-    USE_LOCAL_SQLITE = False
-elif not USE_LOCAL_SQLITE and os.getenv('USE_LOCAL_SQLITE', 'true').lower() == 'true':
-    USE_LOCAL_SQLITE = True
-
-print(f"[DB] USE_LOCAL_SQLITE: {USE_LOCAL_SQLITE}")
-print(f"[DB] SQL_DB_PATH: {SQL_DB_PATH}")
 
 # Query Security Settings
 QUERY_TIMEOUT_MS = int(os.getenv('QUERY_TIMEOUT_MS', 300))
@@ -966,7 +994,8 @@ def health_check():
         cursor = db.cursor()
         cursor.execute('SELECT 1')
         cursor.close()
-        return jsonify({'status': 'ok', 'database': 'connected'})
+        db_type = 'MySQL' if not USE_LOCAL_SQLITE else 'SQLite'
+        return jsonify({'status': 'ok', 'database': db_type})
     except Exception as e:
         return jsonify({'status': 'error', 'database': str(e)}), 500
 
