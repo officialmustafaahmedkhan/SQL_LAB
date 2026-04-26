@@ -105,20 +105,22 @@ AUTH_DB_PATH = os.getenv('AUTH_DB_PATH', './sqllab_auth.db')
 # SQLite path for practice queries
 SQL_DB_PATH = os.getenv('SQL_DB_PATH', './sqllab.db')
 
-# Dangerous SQL keywords to block
+# SQL keywords to block (only for non-admin users)
 DANGEROUS_KEYWORDS = [
     'INFORMATION_SCHEMA',
-    'MYSQL', 'PERFORMANCE_SCHEMA', 'SHOW DATABASES'
+    'PERFORMANCE_SCHEMA',
 ]
 
+# Full SQL statements allowed
 ALLOWED_STATEMENTS = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 
                  'CREATE TABLE', 'CREATE DATABASE', 'CREATE VIEW',
-                 'USE', 'DROP TABLE', 'DROP DATABASE', 'DROP VIEW',
-                 'ALTER', 'DESCRIBE', 'RENAME', 'TRUNCATE', 
-                 'SHOW TABLES', 'SHOW COLUMNS', 'SHOW INDEX',
-                 'COMMIT', 'ROLLBACK', 'SAVEPOINT', 'START TRANSACTION',
+                 'DROP TABLE', 'DROP DATABASE', 'DROP VIEW',
+                 'ALTER', 'DESCRIBE', 'DESC', 'RENAME', 'TRUNCATE', 
+                 'SHOW TABLES', 'SHOW COLUMNS', 'SHOW INDEX', 'SHOW DATABASES',
+                 'USE',
+                 'BEGIN', 'COMMIT', 'ROLLBACK', 'SAVEPOINT', 'START TRANSACTION',
                  'GRANT', 'REVOKE',
-                 'CALL', 'EXPLAIN']
+                 'CALL', 'EXPLAIN', 'SOURCE']
 
 
 def get_db():
@@ -348,20 +350,39 @@ def generate_otp():
     return ''.join(random.choices(string.digits, k=6))
 
 
-def validate_query(sql):
+def validate_query(sql, is_admin=False):
     """Validate SQL query for security"""
     sql_upper = sql.upper().strip()
     words = sql_upper.split()
     first_word = words[0] if words else ''
     first_two = ' '.join(words[:2]) if len(words) >= 2 else first_word
     
-    # Check for dangerous keywords
-    for keyword in DANGEROUS_KEYWORDS:
-        if keyword in sql_upper:
-            return False, f"Operation '{keyword}' is not allowed"
+    # Block system tables for students only
+    blocked_keywords = ['INFORMATION_SCHEMA', 'PERFORMANCE_SCHEMA', 'MYSQL']
+    if not is_admin:
+        for keyword in blocked_keywords:
+            if keyword in sql_upper:
+                return False, f"Operation '{keyword}' is not allowed (admin only)"
     
-    # Check if query starts with allowed statement (check first word or first two words)
-    if first_word not in ALLOWED_STATEMENTS and first_two not in ALLOWED_STATEMENTS:
+    # All standard SQL statements
+    allowed = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 
+              'CREATE TABLE', 'CREATE DATABASE', 'CREATE VIEW', 'CREATE INDEX',
+              'DROP TABLE', 'DROP DATABASE', 'DROP VIEW',
+              'ALTER', 'DESCRIBE', 'DESC', 'RENAME', 'TRUNCATE', 
+              'SHOW TABLES', 'SHOW COLUMNS', 'SHOW INDEX', 'SHOW DATABASES',
+              'USE',
+              'BEGIN', 'COMMIT', 'ROLLBACK', 'SAVEPOINT', 'START TRANSACTION',
+              'GRANT', 'REVOKE',
+              'CALL', 'EXPLAIN', 'SOURCE',
+              'UNION', 'UNION ALL', 'EXCEPT', 'INTERSECT',
+              'ORDER BY', 'GROUP BY', 'HAVING', 'LIMIT', 'OFFSET',
+              'JOIN', 'INNER JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'FULL JOIN', 'CROSS JOIN',
+              'WHERE', 'AND', 'OR', 'NOT', 'IN', 'BETWEEN', 'LIKE', 'IS NULL', 'IS NOT NULL',
+              'COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'AS',
+              'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
+              'DISTINCT', 'ALL', 'ANY', 'EXISTS']
+    
+    if first_word not in allowed and first_two not in allowed:
         return False, f"Statement '{first_word}' is not allowed"
     
     # Add LIMIT to SELECT queries
@@ -370,7 +391,6 @@ def validate_query(sql):
     
     # Auto-add IF NOT EXISTS for CREATE TABLE
     if sql_upper.startswith('CREATE TABLE') and 'IF NOT EXISTS' not in sql_upper:
-        # Add IF NOT EXISTS after CREATE TABLE
         sql = sql.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)
     
     return True, sql
@@ -637,6 +657,13 @@ def execute_query():
     if not sql:
         return jsonify({'error': 'Query required'}), 400
     
+    # Check if user is admin
+    auth_db = get_auth_db()
+    auth_cursor = auth_db.cursor()
+    auth_cursor.execute('SELECT role FROM users WHERE id = ?', (user_id,))
+    user_row = auth_cursor.fetchone()
+    is_admin = user_row and user_row[3] == 'admin'
+    
     # Split queries by semicolon
     queries = split_queries(sql)
     all_results = []
@@ -652,8 +679,8 @@ def execute_query():
             
         start_time = datetime.now()
         
-        # Validate query
-        is_valid, result = validate_query(query)
+        # Validate query with admin status
+        is_valid, result = validate_query(query, is_admin)
         if not is_valid:
             all_errors.append({
                 'query': query,
